@@ -37,6 +37,8 @@ class WebToApp
 
     private array $timings = [];
 
+    private bool $isWindows = false;
+
     public static function start(): void
     {
         (new self())->startConversion();
@@ -46,6 +48,8 @@ class WebToApp
 
     public function startConversion(): void
     {
+        $this->isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+
         $this->giveIntro();
 
         if (confirm('Load from a previous build?', false)) {
@@ -75,13 +79,23 @@ class WebToApp
         info('Dev APK file: ' . $this->buildDir . $this->shortName . '-dev.apk');
 
         if (confirm('Do you want to build the release APK file?')) {
-            // Build the release APK file
-            // $this->createReleaseApk();
+            spin(function () {
+                info('Building the RELEASE APK file...');
+
+                // Build the release APK file
+                $this->createReleaseApk();
+
+                info('APK file created.');
+                note('Location: ' . $this->buildDir . $this->shortName . '-release.apk');
+            }, 'Building the APK file');
         }
 
         if (confirm('Do you want to run the app in an emulator?')) {
             // Run the app in an emulator
-            exec('cd ' . $this->buildDir . 'android/ && adb install -r ' . $this->shortName . '-dev.apk', $output, $return_var);
+            exec('cd ' . $this->buildDir . ' && adb install -r ' . $this->shortName . '-dev.apk', $output, $return_var);
+
+            // Launch the app
+            exec('cd ' . $this->buildDir . ' && adb shell monkey -p ' . $this->packageName . ' -c android.intent.category.LAUNCHER 1', $output, $return_var);
 
             if ($return_var === 0) {
                 info('App installed successfully.');
@@ -90,6 +104,8 @@ class WebToApp
                 exit(1);
             }
         }
+
+        $this->printTimings();
 
         return;
     }
@@ -237,6 +253,19 @@ class WebToApp
         $this->versionCode = $reference['versionCode'];
         $this->versionName = $reference['versionName'];
 
+        if (confirm('Do you want to update the version code and version name?', false)) {
+            $this->getVersionCode((string) $this->versionCode);
+            $this->getVersionName($this->versionName);
+
+            $this->updateVersion();
+
+            // Update the reference file
+            $reference['versionCode'] = $this->versionCode;
+            $reference['versionName'] = $this->versionName;
+
+            file_put_contents($this->buildDir . 'reference.json', json_encode($reference, JSON_PRETTY_PRINT));
+        }
+
         return $this;
     }
 
@@ -376,6 +405,22 @@ class WebToApp
         return $this;
     }
 
+    private function updateVersion(): self
+    {
+        $androidDir = $this->buildDir . 'android/';
+
+        $file = 'app/build.gradle';
+
+        $content = file_get_contents($androidDir . $file);
+
+        $content = preg_replace('/versionCode \d+/', 'versionCode ' . $this->versionCode, $content);
+        $content = preg_replace('/versionName "\d+\.\d+"/', 'versionName "' . $this->versionName . '"', $content);
+
+        file_put_contents($androidDir . $file, $content);
+
+        return $this;
+    }
+
     private function createReferenceFile(): self
     {
         // Create a json file with the details for future reference
@@ -401,10 +446,20 @@ class WebToApp
         // Create the APK file
         $androidDir = $this->buildDir . 'android/';
 
-        exec('cd ' . $androidDir . ' && ./gradlew assembleDebug', $output, $return_var);
+        $gradlew = $this->isWindows ? 'gradlew.bat' : './gradlew';
+
+        // cd to the android directory
+        $commands = 'cd ' . $androidDir;
+        // Clean the project
+        $commands .= ' && ' . $gradlew . ' clean';
+        // Build the APK file
+        $commands .= ' && ' . $gradlew . ' assembleDebug';
+
+        exec($commands, $output, $return_var);
 
         if ($return_var !== 0) {
             error('Failed to build the APK file. Exiting...');
+            note(isset($output) ? implode("\n", $output) : '');
             exit(1);
         }
 
@@ -421,21 +476,101 @@ class WebToApp
         return $this;
     }
 
+    private function createReleaseApk(): self
+    {
+        $this->startTime = microtime(true);
+
+        // Create the APK file
+        $androidDir = $this->buildDir . 'android/';
+
+        $gradlew = $this->isWindows ? 'gradlew.bat' : './gradlew';
+
+        // Generate the keystore file
+        if (!file_exists($androidDir . 'app/release.keystore')) {
+            info('Generating the keystore file...');
+
+            // Generate random passwords
+            $password = bin2hex(random_bytes(16));
+
+            $qna = "cn={$this->appName}, ou={$this->shortName}, o={$this->shortName}, c=US";
+
+            exec('keytool -genkeypair -dname "' . $qna . '" -alias ' . $this->shortName . ' -keyalg RSA -keysize 2048 -validity 10000 -keystore ' . $androidDir . 'app/release.keystore -storepass ' . $password . ' -keypass ' . $password, $output, $return_var);
+
+            if ($return_var !== 0) {
+                error('Failed to generate the keystore file. Exiting...');
+                note(isset($output) ? implode("\n", $output) : '');
+                exit(1);
+            }
+
+            // replace the keystore password in the build.gradle file
+            $content = file_get_contents($androidDir . 'app/build.gradle');
+
+            $content = preg_replace('/storePassword ".+"/', 'storePassword "' . $password . '"', $content);
+            $content = preg_replace('/keyPassword ".+"/', 'keyPassword "' . $password . '"', $content);
+            $content = preg_replace('/keyAlias ".+"/', 'keyAlias "' . $this->shortName . '"', $content);
+
+            file_put_contents($androidDir . 'app/build.gradle', $content);
+
+            // copy the keystore file to the build directory
+            copy($androidDir . 'app/release.keystore', $this->buildDir . 'release.keystore');
+
+            // Add the keystore password to the reference file
+            $reference = json_decode(file_get_contents($this->buildDir . 'reference.json'), true);
+
+            $reference['ReleaseKeystorePassword'] = $password;
+            $reference['ReleaseKeystoreAlias'] = $this->shortName;
+            $reference['ReleaseKeystoreKeyPassword'] = $password;
+
+            file_put_contents($this->buildDir . 'reference.json', json_encode($reference, JSON_PRETTY_PRINT));
+
+            info('Keystore file generated.');
+        }
+
+        // Generate the release APK file
+
+        // cd to the android directory
+        $commands = 'cd ' . $androidDir;
+        // Clean the project
+        // $commands .= ' && ' . $gradlew . ' clean'; # NO NEED AS IT'S ALREADY BEEN CLEANED IN THE DEV APK BUILD
+        // Build the APK file
+        $commands .= ' && ' . $gradlew . ' assembleRelease';
+
+        exec($commands, $output, $return_var);
+
+        if ($return_var !== 0) {
+            error('Failed to build the APK file. Exiting...');
+            note(isset($output) ? implode("\n", $output) : '');
+            exit(1);
+        }
+
+        // Move the APK file to the build directory
+        rename(
+            $androidDir . 'app/build/outputs/apk/release/app-release.apk',
+            $this->buildDir . $this->shortName . '-release.apk'
+        );
+
+        $this->endTime = microtime(true);
+
+        $this->timings['releaseApk'] = round($this->endTime - $this->startTime, 2);
+
+        return $this;
+    }
+
+    #endregion Functions
+
+    #region Helpers
+
     private function printTimings(): void
     {
         if (empty($this->timings)) {
             return;
         }
 
-        info('Time taken:');
+        info('Total time taken: ' . round(array_sum($this->timings), 2) . ' seconds');
         foreach ($this->timings as $name => $time) {
             info($name . ': ' . $time . ' seconds');
         }
     }
-
-    #endregion Functions
-
-    #region Helpers
 
     private function copyFiles(string $source, string $destination): void
     {

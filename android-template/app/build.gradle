@@ -10,10 +10,21 @@ android {
         versionCode {{VERSION_CODE}}
         versionName "{{VERSION_NAME}}"
     }
+
+    signingConfigs {
+        release {
+            storeFile file("release.keystore")
+            storePassword "PASSWORD"
+            keyAlias "ALIAS"
+            keyPassword "PASSWORD"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }
