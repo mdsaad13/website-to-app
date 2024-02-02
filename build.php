@@ -4,6 +4,11 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/src/WebToApp.php';
 
+// Check if script is running from the command line.
+if (php_sapi_name() !== 'cli') {
+    die('This script can only be run from the command line.');
+}
+
 /**
  * Start the conversion process.
  * 
