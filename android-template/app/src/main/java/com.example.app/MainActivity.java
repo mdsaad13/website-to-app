@@ -37,10 +37,23 @@ public class MainActivity extends Activity {
         webSettings.setSupportZoom(true);
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
+        webSettings.setMediaPlaybackRequiresUserGesture(false);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        webSettings.setBlockNetworkImage(false);
+        webSettings.setBlockNetworkLoads(false);
+        webSettings.setLoadsImagesAutomatically(true);
+        webSettings.setGeolocationEnabled(true);
+        webSettings.setNeedInitialFocus(true);
         mWebView.setWebViewClient(new MyWebViewClient() {
             @Override
             public void onReceivedSslError(final WebView view, final SslErrorHandler handler, final SslError error) {
                 handler.proceed();
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return false;
             }
         });
 
